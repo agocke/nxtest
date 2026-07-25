@@ -7,7 +7,7 @@
 
   <!-- Shared NuGet package metadata. Update <Version> here to release a new version. -->
   <PropertyGroup>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>NXTest Team</Authors>
     <Copyright>© NXTest Team</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
