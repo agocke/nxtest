@@ -10,7 +10,7 @@ public static class NXTestExtensions
 {
     /// <summary>
     /// Registers the NXTest test framework with the given Microsoft.Testing.Platform
-    /// application builder. Called by the auto-generated MTP entry point.
+    /// application builder. This supports custom Microsoft.Testing.Platform hosts.
     /// </summary>
     /// <param name="builder">The test application builder.</param>
     /// <param name="testClasses">The test metadata to run (typically <c>TestRegistry.GetAllTests()</c>).</param>

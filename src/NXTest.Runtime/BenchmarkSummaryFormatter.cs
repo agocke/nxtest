@@ -32,19 +32,14 @@ internal static class BenchmarkSummaryFormatter
 
         var anyUnstable = completed.Any(c => !c.Statistics.IsStable);
         var anyCalibrationCapped = completed.Any(c => !c.Statistics.CalibrationTargetReached);
-        var anyNotConverged = completed.Any(c => !c.Statistics.MeasurementConverged);
 
-        if (anyUnstable || anyCalibrationCapped || anyNotConverged)
+        if (anyUnstable || anyCalibrationCapped)
         {
             builder.AppendLine();
             builder.AppendLine("Notes:");
             if (anyUnstable)
                 builder.AppendLine(
                     $"  {UnstableMarker} unstable: distinct timing regimes were detected across samples; interpret with caution."
-                );
-            if (anyNotConverged)
-                builder.AppendLine(
-                    "  ! not converged: the target precision was not reached within the sample limit."
                 );
             if (anyCalibrationCapped)
                 builder.AppendLine(
@@ -80,13 +75,22 @@ internal static class BenchmarkSummaryFormatter
     )
     {
         var floorHeader = $"Floor (P{(int)(BenchmarkAnalysis.LowerQuantile * 100)})";
-        string[] headers = ["Benchmark", "Median", floorHeader, "MAD", "Alloc/op", "GC/1k op"];
+        string[] headers =
+        [
+            "Benchmark",
+            "Median",
+            floorHeader,
+            "MAD",
+            "Alloc/op",
+            "GC/1k op",
+        ];
 
         var rows = new List<string[]>();
         foreach (var result in completed)
         {
             var statistics = result.Statistics;
-            var totalOperations = (long)statistics.Iterations * statistics.OperationsPerIteration;
+            var totalOperations =
+                (long)statistics.Iterations * statistics.OperationsPerIteration;
             var bytesPerOperation = totalOperations > 0
                 ? statistics.AllocatedBytes / (double)totalOperations
                 : 0d;
@@ -166,8 +170,6 @@ internal static class BenchmarkSummaryFormatter
         var suffix = "";
         if (!statistics.IsStable)
             suffix += UnstableMarker;
-        if (!statistics.MeasurementConverged)
-            suffix += "!";
         if (!statistics.CalibrationTargetReached)
             suffix += "~";
         return suffix;

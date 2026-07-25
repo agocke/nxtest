@@ -1,9 +1,10 @@
 # NXTest.Runtime
 
-The execution engine and runner for the NXTest testing framework, built on
-Microsoft.Testing.Platform.
+The execution engine and runner for the NXTest testing framework. Regular tests use
+Microsoft.Testing.Platform; direct benchmark runs bypass it.
 
-Use it as the entry point of a test executable, passing the generated test registry:
+The source generator normally supplies the entry point. Custom hosts can call the same
+dispatcher explicitly:
 
 ```csharp
 using NXTest.Generated;

@@ -6,7 +6,8 @@ internal static class BenchmarkResultFormatter
 {
     public static string Format(BenchmarkStatistics statistics)
     {
-        var totalOperations = (long)statistics.Iterations * statistics.OperationsPerIteration;
+        var totalOperations =
+            (long)statistics.Iterations * statistics.OperationsPerIteration;
         var bytesPerOperation = totalOperations > 0
             ? statistics.AllocatedBytes / (double)totalOperations
             : 0d;
@@ -24,7 +25,6 @@ internal static class BenchmarkResultFormatter
             + $"Min: {FormatNanoseconds(statistics.MinimumNanoseconds)}; "
             + $"Max: {FormatNanoseconds(statistics.MaximumNanoseconds)}; "
             + $"Samples: {statistics.Iterations}; "
-            + $"Outliers: {statistics.OutlierCount}; "
             + $"Operations/iteration: {statistics.OperationsPerIteration}; "
             + $"Allocated: {FormatBytesPerOperation(bytesPerOperation)}; "
             + $"GC/1k op: {FormatCollectionsPerThousand(gen0Per1kOperations)}/"
@@ -34,11 +34,6 @@ internal static class BenchmarkResultFormatter
                 statistics.CalibrationTargetReached
                     ? ""
                     : "; Warning: calibration reached the operation limit before the target duration"
-            )
-            + (
-                statistics.MeasurementConverged
-                    ? ""
-                    : "; Warning: measurement did not reach the target precision"
             )
             + (
                 statistics.IsStable

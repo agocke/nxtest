@@ -9,7 +9,12 @@ namespace NXTest.Generators.Tests;
 
 public static class TestHelpers
 {
-    public static async Task<CSharpCompilation> CreateCompilation(string src, MetadataReference[]? additionalRefs = null, string? assemblyName = null)
+    public static async Task<CSharpCompilation> CreateCompilation(
+        string src,
+        MetadataReference[]? additionalRefs = null,
+        string? assemblyName = null,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary
+    )
     {
         additionalRefs ??= Array.Empty<MetadataReference>();
         IEnumerable<MetadataReference> refs = await Config.Net10Ref.ResolveAsync(null, default);
@@ -19,7 +24,7 @@ public static class TestHelpers
             assemblyName ?? "TestAssembly",
             new[] { CSharpSyntaxTree.ParseText(src) },
             references: refs,
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+            options: new CSharpCompilationOptions(outputKind)
                 .WithNullableContextOptions(NullableContextOptions.Enable));
     }
 

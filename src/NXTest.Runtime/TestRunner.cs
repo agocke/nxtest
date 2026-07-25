@@ -58,17 +58,19 @@ public static class TestRunner
                     break;
                 case BenchmarkResult.Completed benchmark:
                     completedBenchmarks++;
-                    PrintBenchmark(benchmark);
                     break;
                 case BenchmarkResult.Failed benchmark:
                     failedBenchmarks++;
-                    PrintFailure(
-                        "benchmark",
-                        benchmark.Name,
-                        benchmark.ClassName,
-                        benchmark.ErrorMessage,
-                        benchmark.StackTrace
-                    );
+                    if (!options.RunBenchmarks)
+                    {
+                        PrintFailure(
+                            "benchmark",
+                            benchmark.Name,
+                            benchmark.ClassName,
+                            benchmark.ErrorMessage,
+                            benchmark.StackTrace
+                        );
+                    }
                     break;
                 case BenchmarkResult.Skipped:
                     skippedBenchmarks++;
@@ -76,15 +78,29 @@ public static class TestRunner
             }
         }
 
-        PrintSummary(
-            passed,
-            failed,
-            skipped,
-            completedBenchmarks,
-            failedBenchmarks,
-            skippedBenchmarks,
-            duration
-        );
+        if (options.RunBenchmarks)
+        {
+            Console.Write(
+                BenchmarkTextFormatter.Format(
+                    results,
+                    Guid.NewGuid(),
+                    DateTimeOffset.UtcNow
+                )
+            );
+        }
+
+        if (!options.RunBenchmarks)
+        {
+            PrintSummary(
+                passed,
+                failed,
+                skipped,
+                completedBenchmarks,
+                failedBenchmarks,
+                skippedBenchmarks,
+                duration
+            );
+        }
 
         return failed + failedBenchmarks > 0 ? 1 : 0;
     }
@@ -103,16 +119,6 @@ public static class TestRunner
         if (!string.IsNullOrEmpty(stackTrace))
             Console.WriteLine(stackTrace);
         Console.WriteLine();
-    }
-
-    private static void PrintBenchmark(
-        BenchmarkResult.Completed result
-    )
-    {
-        Console.WriteLine(
-            $"benchmark {result.ClassName}.{result.Name}: "
-            + BenchmarkResultFormatter.Format(result.Statistics)
-        );
     }
 
     private static void PrintSummary(

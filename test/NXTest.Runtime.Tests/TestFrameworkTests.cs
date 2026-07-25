@@ -30,4 +30,23 @@ public class TestFrameworkTests
 
         XunitAssert.Empty(arguments);
     }
+
+    [Fact]
+    public void IsDotnetTestInvocation_RequiresExecutionId()
+    {
+        XunitAssert.False(TestFramework.IsDotnetTestInvocation(null));
+        XunitAssert.False(TestFramework.IsDotnetTestInvocation(""));
+        XunitAssert.True(TestFramework.IsDotnetTestInvocation("execution-id"));
+    }
+
+    [Fact]
+    public void IsMtpServerInvocation_RequiresServerArgument()
+    {
+        XunitAssert.False(TestFramework.IsMtpServerInvocation(["--bench"]));
+        XunitAssert.True(
+            TestFramework.IsMtpServerInvocation(
+                ["--bench", "--server", "dotnettestcli"]
+            )
+        );
+    }
 }
