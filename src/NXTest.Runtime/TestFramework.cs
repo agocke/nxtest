@@ -20,6 +20,8 @@ public sealed class TestFramework : ITestFramework, IDataProducer
 {
     private const string s_benchmarkArgument = "--bench";
     private const string s_displayName = "nxtest Microsoft.Testing.Platform framework";
+    private const string s_dotnetTestExecutionId =
+        "TESTINGPLATFORM_DOTNETTEST_EXECUTIONID";
 
     public string Uid => "64e8dd3a-ae2c-448f-9481-587f0252bfb8";
 
@@ -71,6 +73,15 @@ public sealed class TestFramework : ITestFramework, IDataProducer
         var runBenchmarks =
             options?.RunBenchmarks == true
             || args.Contains(s_benchmarkArgument, StringComparer.Ordinal);
+        if (runBenchmarks && !IsMtpServerInvocation(args))
+        {
+            return await TestRunner.RunAsync(
+                testClasses,
+                CreateBenchmarkOptions(options),
+                cancellationToken
+            );
+        }
+
         var platformArgs = GetPlatformArguments(args, runBenchmarks);
 
         var builder = await TestApplication.CreateBuilderAsync(platformArgs);
@@ -83,10 +94,8 @@ public sealed class TestFramework : ITestFramework, IDataProducer
 
     /// <summary>
     /// Registers the NXTest framework with a Microsoft.Testing.Platform application
-    /// builder. This is the integration point used by the auto-generated MTP entry point
-    /// so tests can be run without a hand-written <c>Main</c>. TRX reporting is contributed
-    /// separately (by the platform's self-registration, or by <see cref="RunAsync"/> for
-    /// manually hosted builders).
+    /// builder. This supports custom Microsoft.Testing.Platform hosts. TRX reporting is
+    /// contributed separately by the host or by <see cref="RunAsync"/>.
     /// </summary>
     internal static void Register(
         ITestApplicationBuilder builder,
@@ -96,8 +105,8 @@ public sealed class TestFramework : ITestFramework, IDataProducer
         bool? runBenchmarks = null
     )
     {
-        // When the caller does not specify (e.g. the auto-generated entry point), fall
-        // back to the options flag or the process command line so `--bench` still works.
+        // When a custom host does not specify, fall back to the options flag or the
+        // process command line so `--bench` still works.
         var effectiveRunBenchmarks =
             runBenchmarks
             ?? (options?.RunBenchmarks == true
@@ -126,6 +135,24 @@ public sealed class TestFramework : ITestFramework, IDataProducer
         return args
             .Where(arg => !string.Equals(arg, s_benchmarkArgument, StringComparison.Ordinal))
             .ToArray();
+    }
+
+    internal static bool IsMtpServerInvocation(IReadOnlyList<string> args) =>
+        args.Contains("--server", StringComparer.Ordinal);
+
+    private static TestExecutionOptions CreateBenchmarkOptions(
+        TestExecutionOptions? options
+    )
+    {
+        options ??= TestExecutionOptions.Default;
+        return new TestExecutionOptions
+        {
+            Mode = options.Mode,
+            MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+            StopOnFirstFailure = options.StopOnFirstFailure,
+            RunBenchmarks = true,
+            GlobalTimeout = options.GlobalTimeout,
+        };
     }
 
     public async Task<CloseTestSessionResult> CloseTestSessionAsync(CloseTestSessionContext context)
@@ -259,6 +286,7 @@ public sealed class TestFramework : ITestFramework, IDataProducer
             tests.RemoveAll(
                 test => test.Method is not TestMethodMetadata.Benchmark
             );
+            TestExecutionEngine.SortBenchmarks(tests);
             foreach (var benchmark in tests)
             {
                 if (linkedCt.IsCancellationRequested)
@@ -362,9 +390,26 @@ public sealed class TestFramework : ITestFramework, IDataProducer
         if (_benchmarkResults.Count == 0)
             return;
 
+        if (!IsDotnetTestInvocation(
+            Environment.GetEnvironmentVariable(s_dotnetTestExecutionId)
+        ))
+        {
+            Console.Write(
+                BenchmarkTextFormatter.Format(
+                    _benchmarkResults,
+                    Guid.NewGuid(),
+                    DateTimeOffset.UtcNow
+                )
+            );
+            return;
+        }
+
         Console.WriteLine();
         Console.Write(BenchmarkSummaryFormatter.FormatSummary(_benchmarkResults));
     }
+
+    internal static bool IsDotnetTestInvocation(string? executionId) =>
+        !string.IsNullOrEmpty(executionId);
 
     private static TestNode CreateTestNode(TestResult result)
     {

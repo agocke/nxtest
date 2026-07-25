@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
 using XunitAssert = Xunit.Assert;
 
 namespace NXTest.Generators.Tests;
@@ -301,8 +302,10 @@ public class Benchmarks
         XunitAssert.Contains("DisplayName = \"size: 16, encoding:", generatedSource);
         XunitAssert.Contains("DisplayName = \"size: 64, encoding:", generatedSource);
         XunitAssert.Contains("BenchmarkDispatch =", generatedSource);
+        XunitAssert.Contains("BenchmarkDispatch0", generatedSource);
+        XunitAssert.Contains("MethodImplOptions.AggressiveOptimization", generatedSource);
         XunitAssert.Contains(
-            "(receiver, benchmarkArgs, invocationCount)",
+            "object? receiver, object? benchmarkArgs, int invocationCount",
             generatedSource
         );
         XunitAssert.Contains(
@@ -388,6 +391,39 @@ public class InvalidBenchmarks
         XunitAssert.DoesNotContain(
             result.GeneratedTrees,
             tree => tree.FilePath.EndsWith("InvalidBenchmarks_Metadata.g.cs")
+        );
+    }
+
+    [Fact]
+    public async Task GeneratesEntryPointForExecutableWithoutMain()
+    {
+        var source = """
+using NXTest;
+
+public static class Tests
+{
+    [Fact]
+    public static void Pass() { }
+}
+""";
+        var runtimeReference = MetadataReference.CreateFromFile(
+            typeof(NXTest.Runtime.TestFramework).Assembly.Location
+        );
+        var compilation = await TestHelpers.CreateCompilation(
+            source,
+            additionalRefs: [runtimeReference],
+            outputKind: OutputKind.ConsoleApplication
+        );
+        var result = TestHelpers.RunGenerator(compilation).GetRunResult();
+
+        XunitAssert.Contains(
+            result.GeneratedTrees,
+            tree => tree.FilePath.EndsWith("NXTestEntryPoint.g.cs")
+        );
+        var generatedCompilation = compilation.AddSyntaxTrees(result.GeneratedTrees);
+        XunitAssert.DoesNotContain(
+            generatedCompilation.GetDiagnostics(),
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Error
         );
     }
 

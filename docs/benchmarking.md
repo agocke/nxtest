@@ -50,12 +50,10 @@ Normal test runs exclude benchmarks:
 dotnet test
 ```
 
-Run the benchmark project directly in Release mode to see timing details for
-successful benchmarks:
+Use `dotnet test` in Release mode for the human benchmark summary:
 
 ```bash
-dotnet run --project perf/bench/bench.csproj -c Release -- \
-  --bench
+dotnet test perf/bench/bench.csproj -c Release -- --bench
 ```
 
 Replace `perf/bench/bench.csproj` with the path to your benchmark project.
@@ -63,6 +61,12 @@ Replace `perf/bench/bench.csproj` with the path to your benchmark project.
 stays quiet — the platform's normal per-test output is used — and NXTest prints a
 single summary table once every benchmark has completed (see
 [Measurement and Results](#measurement-and-results)).
+
+Run the benchmark application directly when collecting machine-readable results:
+
+```bash
+dotnet run --project perf/bench/bench.csproj -c Release -- --bench > old.txt
+```
 
 Programmatic callers can select the same mode with
 `TestExecutionOptions.RunBenchmarks = true`.
@@ -72,7 +76,7 @@ Programmatic callers can select the same mode with
 Each instance benchmark case gets its own class instance. NXTest:
 
 1. Constructs the instance once.
-2. Reuses it for every preparation, pilot, warmup, and measured invocation.
+2. Reuses it for every preparation, calibration, warmup, and measured invocation.
 3. Disposes it once after the benchmark completes when it implements `IDisposable`.
 
 Construction and disposal are outside the measurement window. Constructors can
@@ -118,55 +122,55 @@ would not help: its read cost and required fencing exceed the cost of a few-nano
 operation, and the counter's frequency is unrelated to instruction throughput.
 
 The runner therefore measures a **batch** of many operations per sample and divides by
-the operation count. A batch spanning tens of milliseconds amortizes both the coarse
+the operation count. A batch spanning roughly one hundred milliseconds amortizes both the coarse
 clock quantum and the per-read overhead to a negligible fraction, which is why the
 duration targets below are expressed in milliseconds even though individual operations
 may take only a few nanoseconds.
 
 ### Pilot, warmup, and measurement
 
-The runner first executes one untimed preparation operation so cold JIT compilation
-cannot make the first pilot appear long enough and incorrectly select one operation
-per sample. The pilot stage then starts with one operation per iteration. Very short
-pilots increase geometrically; once a batch is long enough for the clock quantum to be
+The runner explicitly prepares the generated dispatch delegate and executes one untimed
+preparation operation so cold JIT compilation cannot make the first calibration batch
+appear long enough and incorrectly select one operation per sample. Calibration starts
+with one operation per iteration. Very short batches increase geometrically; once a
+batch is long enough for the clock quantum to be
 negligible, the runner projects the operation count needed for an iteration of at
 least 20 milliseconds. The count is bounded by an internal safety limit. This reaches
 a useful signal with fewer state-mutating pilot invocations than simple doubling. If
 the limit is reached first, the result reports a calibration warning.
 
 After calibration, the runner warms up with an *adaptive* stability condition rather
-than a fixed duration: it runs batches until the most recent window of per-operation
-timings varies by no more than a small relative threshold, which catches both level
-shifts and monotonic drift as a benchmark climbs the JIT's compilation tiers. Warmup
-runs for at least a few iterations and is bounded by an iteration and time cap.
+than a fixed duration: it runs between six and fifty batches and requires the most
+recent window of per-operation timings to be both narrow and to show at least four
+timing-direction changes (or be completely flat). This catches level shifts and
+monotonic drift as a benchmark climbs the JIT's compilation tiers. Warmup is bounded
+by an iteration and time cap.
 
-Because the pilot calibration measured cold, un-tiered code, the runner then
-**recalibrates** the batch size against the warmed per-operation timing, targeting
-roughly 50 milliseconds per sample. A larger batch keeps the coarse clock quantum a
-negligible fraction of each sample once the method has reached steady state, instead
-of relying on a batch size computed from slower startup code.
+Because calibration measured cold, un-tiered code, the runner recalibrates the warmed
+per-operation timing to a 100 millisecond batch and executes two discarded final-size
+settling batches. Each observed timing corrects the next operation count in case
+Dynamic PGO accelerates the workload at the larger batch size. The runner then performs
+a full garbage collection and records consecutive batches until it has both at least
+ten samples and one second of measured work. Normally these are ten 100 millisecond
+samples; if late optimization makes the batches shorter, measurement simply collects
+more of them. It does not collect between samples, so workload-triggered collections
+and sustained heap behavior remain part of the timed epoch.
 
-Before measurement the runner performs a single full garbage collection and settles
-pending finalizers, then records the heap state. It does **not** collect between
-samples, so realistic allocation costs remain visible. It records between ten and
-fifty samples; sampling stops once the measurement is precise enough, or at the
-sample limit. A result that reaches the limit first reports a precision warning.
-
-Convergence uses a **robust** precision criterion. Rather than testing the mean's
-confidence interval — whose margin a few retained outliers can inflate indefinitely
-— the runner estimates dispersion from the median absolute deviation (scaled to a
-standard-deviation equivalent) and stops once that estimate's margin of error is at
-most 2% of the median. This lets a benchmark with a stable median and MAD converge
-even when an occasional slow sample would otherwise prevent it.
+If the epoch shows a material level shift, its samples are discarded, the benchmark
+performs another adaptive warmup at the final batch size, and measurement retries once.
+The second epoch is reported even if it remains unstable. No duration or sample-count
+planning is performed from observed measurement data.
 
 Each sample times one calibrated batch and is divided by its operation count. The
-generated dispatch places the repetition loop around a direct method call, so clock
-and delegate dispatch overhead occur once per sample rather than once per operation;
+generated synchronous dispatch uses a named loop marked
+`MethodImplOptions.AggressiveOptimization` around a direct method call, so clock and
+delegate dispatch overhead occur once per sample rather than once per operation;
 benchmark dispatch performs no string lookup. Cancellation checks and statistical
-analysis occur outside timing. This policy is internal and intentionally not
-configurable. Benchmarks run sequentially to reduce interference.
+analysis occur outside timing. The fixed policy is internal and intentionally not
+configurable. Benchmarks run sequentially in deterministic name order to reduce
+interference and keep each case at a consistent position across repeated runs.
 
-### Stability and robust statistics
+### Stability and descriptive statistics
 
 In-process timing is prone to *non-stationary execution* — the timing can shift
 partway through a run due to late tiering, cache effects, or scheduling. The runner
@@ -203,10 +207,9 @@ the median, the operation has real or noise-induced variance and should be read 
 that in mind.
 
 The mean is intentionally *not* part of the headline: it is dominated by the
-right-hand tail and is the worst estimator of intrinsic cost. It is retained in the
-data model (along with the standard deviation, standard error, and the mean's
-confidence interval) because it is the only additive summary — `mean × operations`
-gives total time — which is useful for throughput and programmatic consumers.
+right-hand tail and is the worst estimator of intrinsic cost. It and the sample
+standard deviation remain available as descriptive values because the mean is the only
+additive summary — `mean × operations` gives total time.
 
 A completed benchmark produces `BenchmarkResult.Completed` with:
 
@@ -215,23 +218,20 @@ A completed benchmark produces `BenchmarkResult.Completed` with:
 - Median and median absolute deviation (primary)
 - Floor / 10th-percentile per-operation time (primary)
 - Minimum and maximum
-- Mean, sample standard deviation, standard error, and the mean's 95% confidence
-  interval (secondary; not shown on the console)
-- Tukey outlier count
+- Mean and sample standard deviation (secondary; not shown on the console)
 - Stability flag (whether distinct timing regimes were detected)
-- Gen0/Gen1/Gen2 collection counts and bytes allocated during measurement
+- Gen0/Gen1/Gen2 collection counts and bytes allocated across the measured epoch
 - Measured iteration count, operations per iteration (after post-warmup
-  recalibration), warmup iteration count, and calibration/convergence status
+  recalibration), warmup iteration count, and calibration status
 
-The `BenchmarkStatistics` record stores GC collection counts and allocated bytes as
-raw totals over the whole measurement window. The console summary presents them
-**normalized per operation** — bytes allocated per operation and collections per
-1,000 operations — matching the convention used by BenchmarkDotNet.
+The console summary presents allocation and GC totals normalized per operation — bytes
+allocated per operation and collections per 1,000 operations — matching the convention
+used by BenchmarkDotNet.
 
 ### The summary table
 
-Rather than printing details as each benchmark finishes, NXTest keeps the run quiet
-and prints a single aligned summary table once all benchmarks have completed:
+When launched through `dotnet test`, NXTest keeps the run quiet and prints a single
+aligned summary table once all benchmarks have completed:
 
 ```
 Benchmark summary
@@ -242,35 +242,59 @@ Benchmark summary
 ```
 
 The `GC/1k op` column reports Gen0/Gen1/Gen2 collections per 1,000 operations. A
-benchmark flagged as unstable is marked with `*`, one that did not converge with `!`,
-and one whose calibration hit the operation limit with `~`; these markers are
-explained in a `Notes` section below the table. Failed and skipped benchmarks are
-listed after the table. The mean, standard deviation, and confidence interval are
-kept in `BenchmarkResult.Completed` for programmatic consumers but are not shown in
-the table.
+benchmark flagged as unstable is marked with `*`, and one whose calibration hit the
+operation limit with `~`; these markers are explained in a `Notes` section below the
+table. Failed and skipped benchmarks are listed after the table. All descriptive
+statistics use every raw sample; no outliers are removed.
 
-Outliers remain in all calculations. They are classified and reported rather than
-silently discarded.
+### Benchmark text output from `dotnet run`
+
+Direct `dotnet run` benchmark execution writes a Go-style benchmark stream. Run
+metadata is retained as `#` comments, followed by one aggregate line for the full
+benchmark execution. The commented human summary appears at the bottom, where it
+remains easy to find in terminal output:
+
+```bash
+dotnet run --project perf/bench/bench.csproj -c Release -- --bench > old.txt
+```
+
+```text
+# nxbench: 1
+# run: 96dd6a9d-b5c6-4131-a100-c61cc9368db8
+# timestamp: 2026-07-22T21:00:00.0000000+00:00
+# benchmark: BenchmarkProbeBenchmarks.Measure stable=true calibrated=true warmup=8
+BenchmarkProbeBenchmarks.Measure 167772160 1.43 ns/op 0 B/op 0 gen0/1k-op 0 gen1/1k-op 0 gen2/1k-op
+#
+# Benchmark summary
+# | Benchmark               | Median  | Floor (P10) | ... |
+# | ProbeBenchmarks.Measure | 1.43 ns |     1.42 ns | ... |
+```
+
+Names containing whitespace or `%` use percent escaping. Direct benchmark mode bypasses
+Microsoft Testing Platform, so NXTest writes only the configuration keys, `#` comments,
+and one `Benchmark...` result per execution. Benchmark code can still write its own
+output; analysis tools should ignore unrecognized lines. Redirecting another invocation
+with `>>` naturally adds an independent result, matching Go's repeated-run model.
 
 Failures and skipped benchmarks produce `BenchmarkResult.Failed` and
-`BenchmarkResult.Skipped`, respectively. At the Microsoft Testing Platform boundary,
-a completed benchmark is represented as a passed node because the platform requires
-test-oriented states; benchmark code does not model it as a passed test.
+`BenchmarkResult.Skipped`, respectively. `dotnet test` continues to represent a
+completed benchmark as a passed MTP node because the platform requires test-oriented
+states; direct `dotnet run -- --bench` does not construct MTP.
 
 ## Current Scope
 
 NXTest intentionally performs best-effort measurement in the test process. Benchmark
-mode excludes regular tests, and the pilot, adaptive warmup, recalibration, and
-measurement stages reduce several important sources of noise without requiring
+mode excludes regular tests, and calibration, adaptive warmup, recalibration, and
+fixed measurement reduce several important sources of noise without requiring
 process isolation.
 
 - Timing still includes loop and method-call overhead, although pilot batching
   amortizes clock and generated-dispatch overhead.
-- There is no overhead subtraction, baseline, or regression comparison. A paired,
-  interleaved comparison mode (for A/B ratios with paired confidence intervals) would
-  be a natural future addition but is out of scope today.
+- There is no overhead subtraction, inferential confidence interval, or regression
+  comparison. A separate comparison tool can consume the raw sample lines without
+  adding statistical policy to the test runtime.
 - Instability is detected and reported, but the runner does not model change points
-  or autocorrelation explicitly, nor does it bootstrap confidence intervals.
+  or autocorrelation explicitly.
 - Parameterless benchmark signatures are documented but not yet diagnosed by the
   source generator.
 

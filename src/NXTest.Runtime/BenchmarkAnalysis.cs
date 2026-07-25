@@ -7,8 +7,6 @@ namespace NXTest.Runtime;
 
 internal static class BenchmarkAnalysis
 {
-    internal const int MinimumSampleCount = 10;
-    internal const double TargetRelativeMarginOfError = 0.02;
     internal const double InstabilityThreshold = 0.10;
 
     // The low quantile reported as the "floor": an estimate of the intrinsic
@@ -16,73 +14,11 @@ internal static class BenchmarkAnalysis
     // sample counts than the raw minimum.
     internal const double LowerQuantile = 0.10;
 
-    // Scales the median absolute deviation to a standard-deviation-equivalent
-    // for normally distributed data, giving a robust dispersion estimate.
-    private const double RobustStandardDeviationConstant = 1.4826;
-
-    private static readonly double[] StudentTCriticalValues95 =
-    [
-        12.706,
-        4.303,
-        3.182,
-        2.776,
-        2.571,
-        2.447,
-        2.365,
-        2.306,
-        2.262,
-        2.228,
-        2.201,
-        2.179,
-        2.160,
-        2.145,
-        2.131,
-        2.120,
-        2.110,
-        2.101,
-        2.093,
-        2.086,
-        2.080,
-        2.074,
-        2.069,
-        2.064,
-        2.060,
-        2.056,
-        2.052,
-        2.048,
-        2.045,
-        2.042,
-    ];
-
-    internal static bool HasMetPrecision(IReadOnlyList<double> samples)
-    {
-        if (samples.Count < MinimumSampleCount)
-            return false;
-
-        var median = Median(samples);
-        if (median <= 0)
-            return false;
-
-        // Base convergence on a robust dispersion estimate rather than the
-        // sample standard deviation. A few retained outliers inflate the
-        // variance enough to keep an otherwise-tight benchmark from ever
-        // meeting its precision target, even when the median and MAD are
-        // stable. The MAD, scaled to a standard-deviation equivalent, is
-        // insensitive to those outliers while preserving the "2% relative
-        // precision" interpretation (now relative to the median).
-        var robustStandardDeviation =
-            RobustStandardDeviationConstant * MedianAbsoluteDeviation(samples, median);
-        var standardError = robustStandardDeviation / Math.Sqrt(samples.Count);
-        var marginOfError = GetCriticalValue95(samples.Count - 1) * standardError;
-        return marginOfError <= median * TargetRelativeMarginOfError;
-    }
-
     internal static BenchmarkStatistics Calculate(
         double[] samples,
         int operationsPerIteration,
         bool calibrationTargetReached,
         int warmupIterations,
-        bool measurementConverged,
         long totalMeasurementTimestampTicks,
         TestExecutionEngine.BenchmarkGcStatistics gcStatistics = default
     )
@@ -95,25 +31,9 @@ internal static class BenchmarkAnalysis
 
         var summary = CalculateMeanAndVariance(samples);
         var standardDeviation = Math.Sqrt(summary.SampleVariance);
-        var standardError = standardDeviation / Math.Sqrt(samples.Length);
-        var marginOfError = GetCriticalValue95(samples.Length - 1) * standardError;
-
         var median = Percentile(sortedSamples, 0.5);
         var lowerQuantile = Percentile(sortedSamples, LowerQuantile);
         var medianAbsoluteDeviation = MedianAbsoluteDeviation(samples, median);
-
-        var firstQuartile = Percentile(sortedSamples, 0.25);
-        var thirdQuartile = Percentile(sortedSamples, 0.75);
-        var interquartileRange = thirdQuartile - firstQuartile;
-        var lowerOutlierFence = firstQuartile - 1.5 * interquartileRange;
-        var upperOutlierFence = thirdQuartile + 1.5 * interquartileRange;
-        var outlierCount = 0;
-        foreach (var sample in samples)
-        {
-            if (sample < lowerOutlierFence || sample > upperOutlierFence)
-                outlierCount++;
-        }
-
         var isStable = IsStable(samples);
 
         var retainedSamples = Array.AsReadOnly((double[])samples.Clone());
@@ -122,7 +42,6 @@ internal static class BenchmarkAnalysis
             operationsPerIteration,
             calibrationTargetReached,
             warmupIterations,
-            measurementConverged,
             TimeSpan.FromSeconds(
                 (double)totalMeasurementTimestampTicks / Stopwatch.Frequency
             ),
@@ -133,10 +52,6 @@ internal static class BenchmarkAnalysis
             sortedSamples[0],
             sortedSamples[^1],
             standardDeviation,
-            standardError,
-            Math.Max(0, summary.Mean - marginOfError),
-            summary.Mean + marginOfError,
-            outlierCount,
             medianAbsoluteDeviation,
             isStable,
             gcStatistics.Gen0Collections,
@@ -177,15 +92,6 @@ internal static class BenchmarkAnalysis
         return Math.Abs(secondMedian - firstMedian) / firstMedian <= InstabilityThreshold;
     }
 
-    private static double Median(IReadOnlyList<double> samples)
-    {
-        var sorted = new double[samples.Count];
-        for (var i = 0; i < samples.Count; i++)
-            sorted[i] = samples[i];
-        Array.Sort(sorted);
-        return Percentile(sorted, 0.5);
-    }
-
     private static double MedianAbsoluteDeviation(IReadOnlyList<double> samples, double median)
     {
         var deviations = new double[samples.Count];
@@ -212,16 +118,6 @@ internal static class BenchmarkAnalysis
         var sampleVariance =
             samples.Count > 1 ? sumOfSquaredDifferences / (samples.Count - 1) : 0;
         return (mean, sampleVariance);
-    }
-
-    private static double GetCriticalValue95(int degreesOfFreedom)
-    {
-        if (degreesOfFreedom <= 0)
-            return double.PositiveInfinity;
-        if (degreesOfFreedom <= StudentTCriticalValues95.Length)
-            return StudentTCriticalValues95[degreesOfFreedom - 1];
-
-        return 1.96;
     }
 
     private static double Percentile(double[] sortedSamples, double percentile)

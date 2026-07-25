@@ -16,15 +16,13 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
-    <!-- Ship the MTP builder-hook registration so consumers get an auto-generated
-         test entry point without writing a Main. buildTransitive applies to both
-         direct and transitive package consumers. -->
+    <!-- Disable MTP's entry point so the NXTest generator can emit its dispatcher.
+         buildTransitive applies to both direct and transitive package consumers. -->
     <None Include="build/NXTest.props" Pack="true" PackagePath="buildTransitive/NXTest.props" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Provides the MSBuild targets that generate the MTP entry point and consume
-         TestingPlatformBuilderHook items in consuming projects. -->
+    <!-- Provides the MTP MSBuild integration used by dotnet test. -->
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
   </ItemGroup>
 

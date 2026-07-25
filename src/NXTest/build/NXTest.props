@@ -1,13 +1,6 @@
 <Project>
-  <!--
-    Registers the NXTest builder hook with Microsoft.Testing.Platform so the
-    auto-generated MTP entry point runs NXTest tests without a hand-written Main.
-    The referenced type is emitted by NXTest.Generators into the consuming project.
-  -->
-  <ItemGroup>
-    <TestingPlatformBuilderHook Include="NXTest">
-      <DisplayName>NXTest</DisplayName>
-      <TypeFullName>NXTest.Generated.TestingPlatformBuilderHook</TypeFullName>
-    </TestingPlatformBuilderHook>
-  </ItemGroup>
+  <!-- NXTest generates a small dispatcher so direct benchmark runs can bypass MTP. -->
+  <PropertyGroup>
+    <GenerateTestingPlatformEntryPoint>false</GenerateTestingPlatformEntryPoint>
+  </PropertyGroup>
 </Project>

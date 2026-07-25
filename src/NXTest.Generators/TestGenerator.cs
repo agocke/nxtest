@@ -171,18 +171,26 @@ public sealed class TestGenerator : IIncrementalGenerator
             GenerateTestRegistry(spc, testClasses);
         });
 
-        // Generate the Microsoft.Testing.Platform builder hook so tests can run via the
-        // auto-generated MTP entry point, but only when NXTest.Runtime is referenced.
-        var hasRuntime = context.CompilationProvider
-            .Select(static (compilation, _) =>
-                compilation.GetTypeByMetadataName("NXTest.Runtime.TestFramework") is not null);
+        // NXTest owns the entry point so direct benchmark runs can bypass MTP.
+        // Projects with an explicit Main continue to own their startup path.
+        var entryPoint = context.CompilationProvider
+            .Select(static (compilation, cancellationToken) =>
+                (
+                    HasRuntime:
+                        compilation.GetTypeByMetadataName(
+                            "NXTest.Runtime.TestFramework"
+                        ) is not null,
+                    ShouldGenerate:
+                        compilation.Options.OutputKind
+                            is OutputKind.ConsoleApplication
+                                or OutputKind.WindowsApplication
+                        && compilation.GetEntryPoint(cancellationToken) is null
+                ));
 
-        context.RegisterSourceOutput(hasRuntime, static (spc, hasRuntime) =>
+        context.RegisterSourceOutput(entryPoint, static (spc, entryPoint) =>
         {
-            if (hasRuntime)
-            {
-                GenerateBuilderHook(spc);
-            }
+            if (entryPoint.HasRuntime && entryPoint.ShouldGenerate)
+                GenerateEntryPoint(spc);
         });
     }
 
@@ -369,6 +377,7 @@ public sealed class TestGenerator : IIncrementalGenerator
         var className = testClass.TestClass.Name;
         var safeClassName = GetSafeClassName(testClass.TestClass);
         var fileName = $"{safeClassName}_Metadata.g.cs";
+        var fqName = "global::" + testClass.TestClass.ToDisplayString();
 
         var builder = new IndentingBuilder();
 
@@ -394,6 +403,7 @@ public sealed class TestGenerator : IIncrementalGenerator
 
         builder.Dedent();
         builder.AppendLine("}");
+        GenerateBenchmarkDispatchMethods(builder, testClass, fqName);
         builder.Dedent();
         builder.AppendLine("}");
         builder.Dedent();
@@ -431,6 +441,7 @@ public sealed class TestGenerator : IIncrementalGenerator
         builder.AppendLine("{");
         builder.Indent();
 
+        var benchmarkIndex = 0;
         foreach (var method in testClass.Methods)
         {
             switch (method.Kind)
@@ -439,7 +450,7 @@ public sealed class TestGenerator : IIncrementalGenerator
                     GenerateTheoryMetadata(builder, method);
                     break;
                 case TestMethodKind.Benchmark:
-                    GenerateBenchmarkMetadata(builder, method, fqName);
+                    GenerateBenchmarkMetadata(builder, method, benchmarkIndex++);
                     break;
                 case TestMethodKind.Fact:
                     GenerateFactMetadata(builder, method);
@@ -670,7 +681,7 @@ public sealed class TestGenerator : IIncrementalGenerator
     private static void GenerateBenchmarkMetadata(
         IndentingBuilder builder,
         TestMethodInfo method,
-        string fqName)
+        int benchmarkIndex)
     {
         var methodName = method.MethodSymbol.Name;
         var isAsync = IsAsyncMethod(method.MethodSymbol);
@@ -683,33 +694,65 @@ public sealed class TestGenerator : IIncrementalGenerator
         builder.AppendLine($"IsAsync = {(isAsync ? "true" : "false")},");
         builder.AppendLine($"IsStatic = {(isStatic ? "true" : "false")},");
         GenerateTestCases(builder, method);
-        GenerateBenchmarkDispatch(builder, method, fqName);
+        GenerateBenchmarkDispatch(builder, benchmarkIndex);
         builder.Dedent();
         builder.AppendLine("},");
     }
 
     private static void GenerateBenchmarkDispatch(
         IndentingBuilder builder,
-        TestMethodInfo method,
+        int benchmarkIndex)
+    {
+        builder.AppendLine($"BenchmarkDispatch = BenchmarkDispatch{benchmarkIndex},");
+    }
+
+    private static void GenerateBenchmarkDispatchMethods(
+        IndentingBuilder builder,
+        TestClassWithMethods testClass,
         string fqName)
+    {
+        var benchmarkIndex = 0;
+        foreach (var method in testClass.Methods)
+        {
+            if (method.Kind == TestMethodKind.Benchmark)
+            {
+                GenerateBenchmarkDispatchMethod(builder, method, fqName, benchmarkIndex);
+                benchmarkIndex++;
+            }
+        }
+    }
+
+    private static void GenerateBenchmarkDispatchMethod(
+        IndentingBuilder builder,
+        TestMethodInfo method,
+        string fqName,
+        int benchmarkIndex)
     {
         var methodName = method.MethodSymbol.Name;
         var isAsync = IsAsyncMethod(method.MethodSymbol);
-        var parameters = method.MethodSymbol.Parameters;
         var target = method.MethodSymbol.IsStatic
             ? fqName
             : $"(({fqName})receiver!)";
         var asyncKeyword = isAsync ? "async " : "";
         var awaitKeyword = isAsync ? "await " : "";
 
+        builder.AppendLine("");
+        if (!isAsync)
+        {
+            builder.AppendLine(
+                "[global::System.Runtime.CompilerServices.MethodImpl("
+                    + "global::System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]"
+            );
+        }
         builder.AppendLine(
-            $"BenchmarkDispatch = {asyncKeyword}(receiver, benchmarkArgs, invocationCount) =>"
+            $"private static {asyncKeyword}global::System.Threading.Tasks.Task BenchmarkDispatch{benchmarkIndex}("
+                + "object? receiver, object? benchmarkArgs, int invocationCount)"
         );
         builder.AppendLine("{");
         builder.Indent();
         var argList = GenerateArgumentUnpacking(
             builder,
-            parameters,
+            method.MethodSymbol.Parameters,
             "benchmarkArgs",
             unpackSingleArgument: true
         );
@@ -720,13 +763,9 @@ public sealed class TestGenerator : IIncrementalGenerator
         builder.Dedent();
         builder.AppendLine("}");
         if (!isAsync)
-        {
-            builder.AppendLine(
-                "return global::System.Threading.Tasks.Task.CompletedTask;"
-            );
-        }
+            builder.AppendLine("return global::System.Threading.Tasks.Task.CompletedTask;");
         builder.Dedent();
-        builder.AppendLine("},");
+        builder.AppendLine("}");
     }
 
     private static void GenerateTestRegistry(
@@ -771,29 +810,30 @@ public sealed class TestGenerator : IIncrementalGenerator
         context.AddSource("TestRegistry.g.cs", SourceText.From(builder.ToString(), Encoding.UTF8));
     }
 
-    private static void GenerateBuilderHook(SourceProductionContext context)
+    private static void GenerateEntryPoint(SourceProductionContext context)
     {
         var builder = new IndentingBuilder();
 
         builder.AppendLine("// <auto-generated/>");
         builder.AppendLine("#nullable enable");
         builder.AppendLine("");
-        builder.AppendLine("using Microsoft.Testing.Platform.Builder;");
-        builder.AppendLine("using NXTest.Runtime;");
-        builder.AppendLine("");
         builder.AppendLine("namespace NXTest.Generated");
         builder.AppendLine("{");
         builder.Indent();
         builder.AppendLine("/// <summary>");
-        builder.AppendLine("/// Registers NXTest with the Microsoft.Testing.Platform auto-generated entry point.");
+        builder.AppendLine("/// Dispatches direct benchmark runs before Microsoft.Testing.Platform starts.");
         builder.AppendLine("/// </summary>");
-        builder.AppendLine("internal static class TestingPlatformBuilderHook");
+        builder.AppendLine("internal static class NXTestEntryPoint");
         builder.AppendLine("{");
         builder.Indent();
-        builder.AppendLine("public static void AddExtensions(ITestApplicationBuilder builder, string[] arguments)");
+        builder.AppendLine(
+            "public static global::System.Threading.Tasks.Task<int> Main(string[] args)"
+        );
         builder.AppendLine("{");
         builder.Indent();
-        builder.AppendLine("builder.AddNXTest(TestRegistry.GetAllTests());");
+        builder.AppendLine(
+            "return global::NXTest.Runtime.TestFramework.RunAsync(args, TestRegistry.GetAllTests());"
+        );
         builder.Dedent();
         builder.AppendLine("}");
         builder.Dedent();
@@ -801,7 +841,10 @@ public sealed class TestGenerator : IIncrementalGenerator
         builder.Dedent();
         builder.AppendLine("}");
 
-        context.AddSource("TestingPlatformBuilderHook.g.cs", SourceText.From(builder.ToString(), Encoding.UTF8));
+        context.AddSource(
+            "NXTestEntryPoint.g.cs",
+            SourceText.From(builder.ToString(), Encoding.UTF8)
+        );
     }
 
     private static bool IsAsyncMethod(IMethodSymbol method)

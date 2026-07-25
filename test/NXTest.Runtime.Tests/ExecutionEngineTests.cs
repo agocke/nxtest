@@ -500,10 +500,11 @@ public class ExecutionEngineTests
         );
         XunitAssert.True(invocationCount > 13);
         var benchmark = XunitAssert.IsType<BenchmarkStatistics>(result.Statistics);
-        XunitAssert.InRange(benchmark.Iterations, 10, 50);
+        XunitAssert.True(benchmark.Iterations >= 10);
         XunitAssert.True(benchmark.OperationsPerIteration > 1);
         XunitAssert.True(benchmark.CalibrationTargetReached);
-        XunitAssert.InRange(benchmark.WarmupIterations, 4, 20);
+        // Initial warmup (up to 50), two settling batches, and one retry warmup.
+        XunitAssert.InRange(benchmark.WarmupIterations, 8, 102);
         XunitAssert.Equal(benchmark.Iterations, benchmark.SamplesNanoseconds.Count);
         XunitAssert.True(benchmark.MinimumNanoseconds <= benchmark.MeanNanoseconds);
         XunitAssert.True(benchmark.MeanNanoseconds <= benchmark.MaximumNanoseconds);
@@ -512,17 +513,9 @@ public class ExecutionEngineTests
         XunitAssert.True(benchmark.MinimumNanoseconds <= benchmark.LowerQuantileNanoseconds);
         XunitAssert.True(benchmark.LowerQuantileNanoseconds <= benchmark.MedianNanoseconds);
         XunitAssert.True(benchmark.StandardDeviationNanoseconds >= 0);
-        XunitAssert.True(benchmark.StandardErrorNanoseconds >= 0);
         XunitAssert.True(benchmark.MedianAbsoluteDeviationNanoseconds >= 0);
         XunitAssert.True(benchmark.AllocatedBytes >= 0);
         XunitAssert.True(benchmark.Gen0Collections >= 0);
-        XunitAssert.True(
-            benchmark.ConfidenceIntervalLowerNanoseconds <= benchmark.MeanNanoseconds
-        );
-        XunitAssert.True(
-            benchmark.MeanNanoseconds <= benchmark.ConfidenceIntervalUpperNanoseconds
-        );
-        XunitAssert.InRange(benchmark.OutlierCount, 0, benchmark.Iterations);
         XunitAssert.True(benchmark.TotalMeasurementTime > TimeSpan.Zero);
     }
 
@@ -562,7 +555,7 @@ public class ExecutionEngineTests
     }
 
     [Fact]
-    public void BenchmarkAnalysis_UsesSampleStatisticsAndRetainsOutliers()
+    public void BenchmarkAnalysis_RetainsAllSamplesForDescriptiveStatistics()
     {
         double[] samples = [1, 2, 3, 4, 5, 6, 7, 8, 9, 100];
 
@@ -571,7 +564,6 @@ public class ExecutionEngineTests
             operationsPerIteration: 32,
             calibrationTargetReached: true,
             warmupIterations: 5,
-            measurementConverged: false,
             totalMeasurementTimestampTicks: System.Diagnostics.Stopwatch.Frequency
         );
 
@@ -581,17 +573,8 @@ public class ExecutionEngineTests
         XunitAssert.Equal(2.5, statistics.MedianAbsoluteDeviationNanoseconds);
         XunitAssert.Equal(1, statistics.MinimumNanoseconds);
         XunitAssert.Equal(100, statistics.MaximumNanoseconds);
-        XunitAssert.Equal(1, statistics.OutlierCount);
         XunitAssert.Equal(samples, statistics.SamplesNanoseconds);
         XunitAssert.Equal(TimeSpan.FromSeconds(1), statistics.TotalMeasurementTime);
-        XunitAssert.True(
-            statistics.ConfidenceIntervalLowerNanoseconds
-                <= statistics.MeanNanoseconds
-        );
-        XunitAssert.True(
-            statistics.MeanNanoseconds
-                <= statistics.ConfidenceIntervalUpperNanoseconds
-        );
     }
 
     [Fact]
@@ -607,6 +590,26 @@ public class ExecutionEngineTests
         );
         // Too few samples to judge; assume stable rather than cry wolf.
         XunitAssert.True(BenchmarkAnalysis.IsStable([100, 200]));
+    }
+
+    [Fact]
+    public void IsWarmupStable_RequiresFourTimingDirectionChanges()
+    {
+        // The samples are narrow enough to meet the 5% spread threshold but
+        // still move monotonically, so tiering has not demonstrably settled.
+        XunitAssert.False(
+            TestExecutionEngine.IsWarmupStable([100, 101, 102, 103, 104, 105])
+        );
+
+        // Four reversals in a similarly narrow window establish that the
+        // benchmark has stopped moving in one direction.
+        XunitAssert.True(
+            TestExecutionEngine.IsWarmupStable([100, 101, 99, 100, 99, 100])
+        );
+
+        XunitAssert.True(
+            TestExecutionEngine.IsWarmupStable([100, 100, 100, 100, 100, 100])
+        );
     }
 
     [Fact]
@@ -649,35 +652,8 @@ public class ExecutionEngineTests
         );
 
         XunitAssert.True(result.Statistics.OperationsPerIteration > 1);
-        XunitAssert.InRange(result.Statistics.WarmupIterations, 4, 20);
-    }
-
-    [Fact]
-    public void BenchmarkAnalysis_RequiresTenPreciseSamplesToConverge()
-    {
-        XunitAssert.False(
-            BenchmarkAnalysis.HasMetPrecision([100, 100, 100, 100, 100, 100, 100, 100, 100])
-        );
-        XunitAssert.True(
-            BenchmarkAnalysis.HasMetPrecision(
-                [100, 100, 100, 100, 100, 100, 100, 100, 100, 100]
-            )
-        );
-        XunitAssert.False(
-            BenchmarkAnalysis.HasMetPrecision(
-                [1, 100, 1, 100, 1, 100, 1, 100, 1, 100]
-            )
-        );
-    }
-
-    [Fact]
-    public void BenchmarkAnalysis_ConvergesDespiteOutliersWhenMedianIsStable()
-    {
-        // Nine tight samples and one large outlier. The mean-based margin of
-        // error would stay inflated and never converge, but the robust
-        // criterion recognizes that precision has been met.
-        double[] samples = [100, 100, 100, 100, 100, 100, 100, 100, 100, 300];
-        XunitAssert.True(BenchmarkAnalysis.HasMetPrecision(samples));
+        // Initial warmup (up to 50), two settling batches, and one retry warmup.
+        XunitAssert.InRange(result.Statistics.WarmupIterations, 8, 102);
     }
 
     [Fact]
@@ -689,16 +665,16 @@ public class ExecutionEngineTests
             operationsPerIteration: 100,
             calibrationTargetReached: true,
             warmupIterations: 5,
-            measurementConverged: true,
             totalMeasurementTimestampTicks: System.Diagnostics.Stopwatch.Frequency,
-            new TestExecutionEngine.BenchmarkGcStatistics(1, 0, 0, 416_000)
+            gcStatistics: new TestExecutionEngine.BenchmarkGcStatistics(
+                1, 0, 0, 416_000
+            )
         );
 
         var formatted = BenchmarkResultFormatter.Format(statistics);
 
-        // 10 samples x 100 operations = 1000 operations; 416000 bytes / 1000 = 416 B/op.
+        // Ten samples of 100 operations ran during the measured epoch.
         XunitAssert.Contains("Allocated: 416.00 B/op", formatted);
-        // 1 gen0 collection over 1000 operations = 1.0000 per 1000 operations.
         XunitAssert.Contains("GC/1k op: 1.0000/0.0000/0.0000", formatted);
         // Median and low-quantile floor lead the summary; mean is no longer shown.
         XunitAssert.Contains("Median:", formatted);
@@ -755,6 +731,56 @@ public class ExecutionEngineTests
 
         XunitAssert.Equal(2, results.Length);
         XunitAssert.False(overlapDetected);
+    }
+
+    [Fact]
+    public async Task ExecuteTestsAsync_RunsBenchmarksInDeterministicOrder()
+    {
+        var order = new List<string>();
+        var benchmark1Started = false;
+        var benchmark2Started = false;
+        var metadata = new TestClassMetadata
+        {
+            ClassName = "BenchmarkClass",
+            TestMethods =
+            [
+                new TestMethodMetadata.Benchmark
+                {
+                    MethodName = "Benchmark2",
+                    BenchmarkDispatch = (_, _, _) =>
+                    {
+                        if (!benchmark2Started)
+                        {
+                            benchmark2Started = true;
+                            order.Add("Benchmark2");
+                        }
+                        return Task.CompletedTask;
+                    },
+                },
+                new TestMethodMetadata.Benchmark
+                {
+                    MethodName = "Benchmark1",
+                    BenchmarkDispatch = (_, _, _) =>
+                    {
+                        if (!benchmark1Started)
+                        {
+                            benchmark1Started = true;
+                            order.Add("Benchmark1");
+                        }
+                        return Task.CompletedTask;
+                    },
+                },
+            ],
+            CreateInstance = () => null,
+            TestDispatch = (_, _, _) => Task.CompletedTask,
+        };
+
+        await TestExecutionEngine.ExecuteTestsAsync(
+            [metadata],
+            new TestExecutionOptions { RunBenchmarks = true }
+        );
+
+        XunitAssert.Equal(["Benchmark1", "Benchmark2"], order);
     }
 
     [Fact]
@@ -840,7 +866,7 @@ public class ExecutionEngineTests
     {
         var instancesCreated = 0;
         var instancesDisposed = 0;
-        var invocations = 0;
+        long invocations = 0;
         object? benchmarkInstance = null;
         var reusedInstance = true;
         var metadata = new TestClassMetadata
@@ -879,8 +905,8 @@ public class ExecutionEngineTests
         XunitAssert.IsType<BenchmarkResult.Completed>(result);
         XunitAssert.Equal(1, instancesCreated);
         XunitAssert.Equal(1, instancesDisposed);
-        XunitAssert.True(invocations > 13);
-        XunitAssert.True(reusedInstance);
+        XunitAssert.True(invocations > 13, $"Expected more than 13 invocations, got {invocations}.");
+        XunitAssert.True(reusedInstance, "Benchmark dispatch received a different instance.");
     }
 
     [Fact]
