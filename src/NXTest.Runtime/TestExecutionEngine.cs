@@ -419,6 +419,17 @@ public static class TestExecutionEngine
         {
             await dispatch(testClassInstance, methodName, theoryArgs);
         }
+        catch (SkipException ex)
+        {
+            // If the delegate throws a SkipException, create a skipped result
+            sw.Stop();
+            return new TestResult.Skipped(
+                testId,
+                testName,
+                className,
+                ex.Message
+            );
+        }
         catch (Exception ex)
         {
             // If the delegate throws, create a failure result
@@ -565,6 +576,16 @@ public static class TestExecutionEngine
                     measurement.Measurement.TotalTimestampTicks,
                     measurement.GcStatistics
                 )
+            );
+        }
+        catch (SkipException ex)
+        {
+            totalStopwatch.Stop();
+            return new BenchmarkResult.Skipped(
+                testId,
+                testName,
+                className,
+                ex.Message
             );
         }
         catch (Exception ex)

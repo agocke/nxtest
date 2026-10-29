@@ -27,6 +27,24 @@ public class SimpleTests
     }
 
     [Fact]
+    public Task GeneratesMetadataForSkippedFact()
+    {
+        var source = """
+using NXTest;
+
+public class SkippedFactTests
+{
+    [Fact(Skip = "Not implemented yet")]
+    public void SkippedTest()
+    {
+        // Test implementation
+    }
+}
+""";
+        return VerifyGenerator(source);
+    }
+
+    [Fact]
     public Task GeneratesMetadataForTheoryWithInlineData()
     {
         var source = """

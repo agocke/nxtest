@@ -301,6 +301,37 @@ public class ExecutionEngineTests
     }
 
     [Fact]
+    public async Task ExecuteTestsAsync_WithSkipException_ReturnsSkippedResult()
+    {
+        // Arrange: Create a test that throws a SkipException
+        var testMetadata = new TestClassMetadata
+        {
+            ClassName = "SkipExceptionTestClass",
+            TestMethods =
+            [
+                new TestMethodMetadata.Fact { MethodName = "SkipExceptionTest", Skip = false },
+            ],
+            CreateInstance = () => null,
+            TestDispatch = async (_, methodName, _) =>
+            {
+                await Task.CompletedTask;
+                if (methodName == "SkipExceptionTest")
+                    throw new SkipException("Skipped via exception");
+            },
+        };
+
+        var options = TestExecutionOptions.Default;
+
+        // Act
+        var results = await TestExecutionEngine.ExecuteTestsAsync([testMetadata], options);
+
+        // Assert
+        var result = XunitAssert.IsType<TestResult.Skipped>(XunitAssert.Single(results));
+        XunitAssert.Equal("SkipExceptionTest", result.Name);
+        XunitAssert.Equal("Skipped via exception", result.Reason);
+    }
+
+    [Fact]
     public async Task ExecuteTestsAsync_WithAsyncTest_ExecutesCorrectly()
     {
         // Arrange: Create an async test

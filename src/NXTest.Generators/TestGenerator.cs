@@ -209,14 +209,33 @@ public sealed class TestGenerator : IIncrementalGenerator
         if (containingClass is null)
             return null;
 
-        return CreateTestMethodInfo(containingClass, methodSymbol, methodSyntax, kind);
+        var skipReason = GetSkipReason(context.Attributes);
+
+        return CreateTestMethodInfo(containingClass, methodSymbol, methodSyntax, kind, skipReason);
+    }
+
+    private static string? GetSkipReason(ImmutableArray<AttributeData> attributes)
+    {
+        foreach (var attribute in attributes)
+        {
+            foreach (var namedArgument in attribute.NamedArguments)
+            {
+                if (namedArgument.Key == "Skip"
+                    && namedArgument.Value.Value is string skipReason)
+                {
+                    return skipReason;
+                }
+            }
+        }
+        return null;
     }
 
     private static TestMethodInfo CreateTestMethodInfo(
         INamedTypeSymbol containingClass,
         IMethodSymbol methodSymbol,
         MethodDeclarationSyntax methodSyntax,
-        TestMethodKind kind)
+        TestMethodKind kind,
+        string? skipReason)
     {
         ImmutableArray<InlineDataCase> inlineDataCases = ImmutableArray<InlineDataCase>.Empty;
 
@@ -247,7 +266,8 @@ public sealed class TestGenerator : IIncrementalGenerator
             methodSymbol,
             methodSyntax,
             kind,
-            inlineDataCases);
+            inlineDataCases,
+            skipReason);
     }
 
     private static ImmutableArray<TestClassWithMethods> GetTestClassesWithMethods(
@@ -609,6 +629,11 @@ public sealed class TestGenerator : IIncrementalGenerator
         builder.AppendLine($"MethodName = \"{methodName}\",");
         builder.AppendLine($"IsAsync = {(isAsync ? "true" : "false")},");
         builder.AppendLine($"IsStatic = {(isStatic ? "true" : "false")},");
+        if (method.SkipReason is { } skipReason)
+        {
+            builder.AppendLine("Skip = true,");
+            builder.AppendLine($"SkipReason = \"{EscapeString(skipReason)}\",");
+        }
         builder.Dedent();
         builder.AppendLine("},");
     }
@@ -963,6 +988,7 @@ public sealed class TestGenerator : IIncrementalGenerator
         public MethodDeclarationSyntax MethodSyntax { get; }
         public TestMethodKind Kind { get; }
         public ImmutableArray<InlineDataCase> InlineDataCases { get; }
+        public string? SkipReason { get; }
         public bool HasSupportedReturnType { get; }
         public bool HasValidBenchmarkData { get; }
 
@@ -971,13 +997,15 @@ public sealed class TestGenerator : IIncrementalGenerator
             IMethodSymbol methodSymbol,
             MethodDeclarationSyntax methodSyntax,
             TestMethodKind kind,
-            ImmutableArray<InlineDataCase> inlineDataCases)
+            ImmutableArray<InlineDataCase> inlineDataCases,
+            string? skipReason)
         {
             ContainingClass = containingClass;
             MethodSymbol = methodSymbol;
             MethodSyntax = methodSyntax;
             Kind = kind;
             InlineDataCases = inlineDataCases;
+            SkipReason = skipReason;
             HasSupportedReturnType = TestGenerator.HasSupportedReturnType(methodSymbol);
             HasValidBenchmarkData =
                 kind != TestMethodKind.Benchmark
@@ -999,7 +1027,8 @@ public sealed class TestGenerator : IIncrementalGenerator
                 methodSymbol,
                 MethodSyntax,
                 Kind,
-                InlineDataCases);
+                InlineDataCases,
+                SkipReason);
         }
     }
 

@@ -23,6 +23,12 @@ public sealed class TestClassAttribute : Attribute
 public sealed class FactAttribute : Attribute
 {
     public FactAttribute() { }
+
+    /// <summary>
+    /// Gets or sets the reason this test is skipped. If non-null, the test is not run
+    /// and is instead reported as skipped with this value as the reason.
+    /// </summary>
+    public string? Skip { get; set; }
 }
 
 /// <summary>
